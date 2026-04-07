@@ -3,7 +3,6 @@
   "plugin": "@提及守卫",
   "version": "1.0.0",
   "main": "index.mjs",
-  "dependencies": {},
   "description": "监测非白名单用户在指定群聊中@机器人时自动禁言30分钟",
   "author": "黄焖鸡",
   "type": "module",
