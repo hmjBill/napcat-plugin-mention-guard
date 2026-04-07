@@ -52,7 +52,7 @@ function readSettings(pluginConfig: Record<string, unknown> | undefined): Runtim
   );
 
   const whitelist = parseIdList(
-    pluginConfig?.whitelist,
+    pluginConfig?.whitelistQQ ?? pluginConfig?.whitelist,
     DEFAULT_WHITELIST,
   );
 
@@ -69,8 +69,19 @@ function readSettings(pluginConfig: Record<string, unknown> | undefined): Runtim
  * 检查消息中是否@了指定用户
  */
 function isAtUser(message: OB11Message, targetUserId: string): boolean {
-  if (!message.message || !Array.isArray(message.message)) {
+  if (!targetUserId) {
     return false;
+  }
+
+  if (!message.message || !Array.isArray(message.message)) {
+    const raw = typeof message.raw_message === "string" ? message.raw_message : "";
+    if (!raw) {
+      return false;
+    }
+
+    const escapedTarget = targetUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const atRegex = new RegExp(`\\[CQ:at,qq=${escapedTarget}(?:,|\\])`);
+    return atRegex.test(raw);
   }
   
   for (const segment of message.message) {
@@ -83,6 +94,34 @@ function isAtUser(message: OB11Message, targetUserId: string): boolean {
   return false;
 }
 
+async function ensureBotUserId(ctx: Parameters<PluginModule['plugin_init']>[0], event?: OB11Message): Promise<string> {
+  if (BOT_USER_ID) {
+    return BOT_USER_ID;
+  }
+
+  if (event && event.self_id !== undefined && event.self_id !== null) {
+    BOT_USER_ID = String(event.self_id);
+    return BOT_USER_ID;
+  }
+
+  try {
+    const config = await ctx.actions.call(
+      'get_login_info',
+      void 0,
+      ctx.adapterName,
+      ctx.pluginManager.config
+    );
+    if (config && config.user_id) {
+      BOT_USER_ID = String(config.user_id);
+      return BOT_USER_ID;
+    }
+  } catch (e) {
+    return "";
+  }
+
+  return "";
+}
+
 // 插件初始化
 export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
   const settings = readSettings(ctx.pluginManager.config as Record<string, unknown> | undefined);
@@ -91,18 +130,10 @@ export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
   ctx.logger.log(`[MentionGuard] 白名单用户: ${settings.whitelist.length} 个`);
   ctx.logger.log(`[MentionGuard] 禁言时长: ${settings.muteDurationSeconds} 秒`);
   
-  try {
-    const config = await ctx.actions.call(
-      'get_login_info', 
-      void 0, 
-      ctx.adapterName, 
-      ctx.pluginManager.config
-    );
-    if (config && config.user_id) {
-      BOT_USER_ID = String(config.user_id);
-      ctx.logger.log(`[MentionGuard] 检测到机器人QQ号: ${BOT_USER_ID}`);
-    }
-  } catch (e) {
+  const botUserId = await ensureBotUserId(ctx);
+  if (botUserId) {
+    ctx.logger.log(`[MentionGuard] 检测到机器人QQ号: ${BOT_USER_ID}`);
+  } else {
     ctx.logger.warn('[MentionGuard] 无法获取机器人QQ号，请确保配置正确');
   }
 };
@@ -124,24 +155,13 @@ export const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx, ev
     return;
   }
   
-  if (!BOT_USER_ID) {
-    try {
-      const config = await ctx.actions.call(
-        'get_login_info', 
-        void 0, 
-        ctx.adapterName, 
-        ctx.pluginManager.config
-      );
-      if (config && config.user_id) {
-        BOT_USER_ID = String(config.user_id);
-      }
-    } catch (e) {
-      return;
-    }
+  const botUserId = await ensureBotUserId(ctx, message);
+  if (!botUserId) {
+    return;
   }
   
   // 检查是否@了机器人
-  if (!isAtUser(message, BOT_USER_ID)) {
+  if (!isAtUser(message, botUserId)) {
     return;
   }
   
@@ -180,16 +200,18 @@ export const plugin_config_ui = [
   {
     key: 'monitoredGroups',
     label: '监控群聊',
-    type: 'array',
-    default: DEFAULT_MONITORED_GROUPS,
-    description: '需要启用守卫的群号列表',
+    type: 'text',
+    default: DEFAULT_MONITORED_GROUPS.join(','),
+    placeholder: '多个群号用逗号/空格/换行分隔',
+    description: '需要启用守卫的群号列表（支持逗号、空格、换行）',
   },
   {
-    key: 'whitelist',
-    label: '白名单用户',
-    type: 'array',
-    default: DEFAULT_WHITELIST,
-    description: '白名单用户QQ号列表，这些用户@机器人不会被禁言',
+    key: 'whitelistQQ',
+    label: '白名单QQ号',
+    type: 'text',
+    default: '',
+    placeholder: '多个QQ号用逗号/空格/换行分隔',
+    description: '白名单QQ号列表，这些用户@机器人不会被禁言',
   },
   {
     key: 'muteDuration',
@@ -201,3 +223,5 @@ export const plugin_config_ui = [
     description: '非白名单用户@机器人后的禁言时长（分钟）',
   },
 ];
+
+export const plugin_config_schema = plugin_config_ui;
