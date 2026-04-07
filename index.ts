@@ -140,15 +140,19 @@ export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
 
 // 消息处理
 export const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx, event) => {
-  // 只处理消息事件
-  if (event.post_type !== EventType.MESSAGE) return;
+  // post_type 在部分事件里可能缺失；仅在存在且非 message 时跳过
+  if (event.post_type && event.post_type !== EventType.MESSAGE) return;
   
-  // 只处理群消息
-  if (event.message_type !== 'group') return;
+  // 仅处理群消息；message_type 在部分事件里可能缺失
+  if (event.message_type && event.message_type !== 'group') return;
   
   const message = event as OB11Message;
   const groupId = message.group_id;
   const userId = String(message.user_id);
+
+  if (!groupId || !userId || userId === "undefined" || userId === "null") {
+    return;
+  }
   const settings = readSettings(ctx.pluginManager.config as Record<string, unknown> | undefined);
   
   if (!groupId || !settings.monitoredGroups.includes(String(groupId))) {
@@ -200,7 +204,7 @@ export const plugin_config_ui = [
   {
     key: 'monitoredGroups',
     label: '监控群聊',
-    type: 'text',
+    type: 'string',
     default: DEFAULT_MONITORED_GROUPS.join(','),
     placeholder: '多个群号用逗号/空格/换行分隔',
     description: '需要启用守卫的群号列表（支持逗号、空格、换行）',
@@ -208,7 +212,7 @@ export const plugin_config_ui = [
   {
     key: 'whitelistQQ',
     label: '白名单QQ号',
-    type: 'text',
+    type: 'string',
     default: '',
     placeholder: '多个QQ号用逗号/空格/换行分隔',
     description: '白名单QQ号列表，这些用户@机器人不会被禁言',

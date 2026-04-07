@@ -17,8 +17,8 @@
 
 ## WebUI 配置项
 
-- `监控群聊`（`monitoredGroups`）：需要启用守卫的群号列表
-- `白名单QQ号`（`whitelistQQ`）：这些用户 @ 机器人不会被禁言
+- `监控群聊`（`monitoredGroups`）：输入框，填写群号列表
+- `白名单QQ号`（`whitelistQQ`）：输入框，填写不会被禁言的 QQ 列表
 - `禁言时长（分钟）`（`muteDuration`）：默认 30 分钟
 
 如果不填写，将使用内置默认值：
