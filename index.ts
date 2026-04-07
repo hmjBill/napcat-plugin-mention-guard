@@ -1,29 +1,69 @@
 import type { PluginModule, OB11Message } from "napcat-types";
 import { EventType } from "napcat-types";
 
-// ============ 配置区域 ============
-// 受监控的群聊列表
-const MONITORED_GROUPS = [
+// ============ 默认配置 ============
+const DEFAULT_MONITORED_GROUPS = [
   "1107201723",
-  "893387793", 
+  "893387793",
   "170874625",
-  "1033811323"
+  "1033811323",
 ];
 
-// OneBot 白名单用户列表（这些用户@你不会被禁言）
-const ONEBOT_WHITELIST = [
-  // 在这里添加白名单用户QQ号，例如:
-  // "123456789",
-  // "987654321"
-];
-
-// 禁言时长（秒）- 30分钟 = 1800秒
-const MUTE_DURATION = 30 * 60;
-
-// 机器人自己的QQ号（需要配置）
-// 可以通过配置文件动态设置
+const DEFAULT_WHITELIST: string[] = [];
+const DEFAULT_MUTE_DURATION_MINUTES = 30;
 let BOT_USER_ID = "";
-// ==================================
+
+type RuntimeSettings = {
+  monitoredGroups: string[];
+  whitelist: string[];
+  muteDurationSeconds: number;
+};
+
+function parseIdList(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/[,\n\r\s]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return fallback;
+}
+
+function parseMuteDurationMinutes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MUTE_DURATION_MINUTES;
+  }
+
+  return Math.floor(parsed);
+}
+
+function readSettings(pluginConfig: Record<string, unknown> | undefined): RuntimeSettings {
+  const monitoredGroups = parseIdList(
+    pluginConfig?.monitoredGroups,
+    DEFAULT_MONITORED_GROUPS,
+  );
+
+  const whitelist = parseIdList(
+    pluginConfig?.whitelist,
+    DEFAULT_WHITELIST,
+  );
+
+  const muteDurationMinutes = parseMuteDurationMinutes(pluginConfig?.muteDuration);
+
+  return {
+    monitoredGroups,
+    whitelist,
+    muteDurationSeconds: muteDurationMinutes * 60,
+  };
+}
 
 /**
  * 检查消息中是否@了指定用户
@@ -35,8 +75,7 @@ function isAtUser(message: OB11Message, targetUserId: string): boolean {
   
   for (const segment of message.message) {
     if (segment.type === "at" && segment.data && segment.data.qq) {
-      // "all" 表示@全体成员，不算@个人
-      if (segment.data.qq === targetUserId) {
+      if (String(segment.data.qq) === targetUserId) {
         return true;
       }
     }
@@ -44,28 +83,14 @@ function isAtUser(message: OB11Message, targetUserId: string): boolean {
   return false;
 }
 
-/**
- * 检查用户是否在白名单中
- */
-function isWhitelisted(userId: string): boolean {
-  return ONEBOT_WHITELIST.includes(userId);
-}
-
-/**
- * 检查群是否在监控列表中
- */
-function isMonitoredGroup(groupId: string | number | undefined): boolean {
-  if (!groupId) return false;
-  return MONITORED_GROUPS.includes(String(groupId));
-}
-
 // 插件初始化
 export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
+  const settings = readSettings(ctx.pluginManager.config as Record<string, unknown> | undefined);
   ctx.logger.log('[MentionGuard] 插件已加载');
-  ctx.logger.log(`[MentionGuard] 监控群聊: ${MONITORED_GROUPS.join(', ')}`);
-  ctx.logger.log(`[MentionGuard] 白名单用户: ${ONEBOT_WHITELIST.length} 个`);
+  ctx.logger.log(`[MentionGuard] 监控群聊: ${settings.monitoredGroups.join(', ')}`);
+  ctx.logger.log(`[MentionGuard] 白名单用户: ${settings.whitelist.length} 个`);
+  ctx.logger.log(`[MentionGuard] 禁言时长: ${settings.muteDurationSeconds} 秒`);
   
-  // 尝试从配置中读取机器人QQ号
   try {
     const config = await ctx.actions.call(
       'get_login_info', 
@@ -93,13 +118,12 @@ export const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx, ev
   const message = event as OB11Message;
   const groupId = message.group_id;
   const userId = String(message.user_id);
+  const settings = readSettings(ctx.pluginManager.config as Record<string, unknown> | undefined);
   
-  // 检查是否在监控群列表中
-  if (!isMonitoredGroup(groupId)) {
+  if (!groupId || !settings.monitoredGroups.includes(String(groupId))) {
     return;
   }
   
-  // 如果机器人QQ号还没获取到，尝试获取
   if (!BOT_USER_ID) {
     try {
       const config = await ctx.actions.call(
@@ -121,22 +145,20 @@ export const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx, ev
     return;
   }
   
-  // 检查用户是否在白名单中
-  if (isWhitelisted(userId)) {
+  if (settings.whitelist.includes(userId)) {
     ctx.logger.log(`[MentionGuard] 白名单用户 ${userId} @了机器人，跳过处理`);
     return;
   }
   
-  // 执行禁言
   try {
-    ctx.logger.log(`[MentionGuard] 检测到非白名单用户 ${userId} 在群 ${groupId} 中@机器人，执行禁言 ${MUTE_DURATION} 秒`);
+    ctx.logger.log(`[MentionGuard] 检测到非白名单用户 ${userId} 在群 ${groupId} 中@机器人，执行禁言 ${settings.muteDurationSeconds} 秒`);
     
     await ctx.actions.call(
       'set_group_ban',
       {
         group_id: String(groupId),
         user_id: userId,
-        duration: MUTE_DURATION
+        duration: settings.muteDurationSeconds,
       },
       ctx.adapterName,
       ctx.pluginManager.config
@@ -156,19 +178,26 @@ export const plugin_cleanup: PluginModule['plugin_cleanup'] = (ctx) => {
 // 配置Schema（可选，用于WebUI配置）
 export const plugin_config_ui = [
   {
+    key: 'monitoredGroups',
+    label: '监控群聊',
+    type: 'array',
+    default: DEFAULT_MONITORED_GROUPS,
+    description: '需要启用守卫的群号列表',
+  },
+  {
     key: 'whitelist',
     label: '白名单用户',
     type: 'array',
-    default: [],
-    description: 'OneBot白名单用户QQ号列表，这些用户@机器人不会被禁言'
+    default: DEFAULT_WHITELIST,
+    description: '白名单用户QQ号列表，这些用户@机器人不会被禁言',
   },
   {
     key: 'muteDuration',
     label: '禁言时长（分钟）',
     type: 'number',
-    default: 30,
+    default: DEFAULT_MUTE_DURATION_MINUTES,
     min: 1,
-    max: 43200,
-    description: '非白名单用户@机器人后的禁言时长（默认30分钟）'
-  }
+    max: 720,
+    description: '非白名单用户@机器人后的禁言时长（分钟）',
+  },
 ];
